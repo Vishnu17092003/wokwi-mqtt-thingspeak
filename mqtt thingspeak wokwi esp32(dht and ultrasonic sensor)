@@ -1,0 +1,168 @@
+#include "DHTesp.h"
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ThingSpeak.h>
+
+const int trig = 32;
+const int echo = 33;
+int statusCode;
+
+long duration;
+float distance;
+
+#define SECRET_SSID "Wokwi-GUEST"    // replace with your WiFi network name
+#define SECRET_PASS "" // replace with your WiFi password 2022763
+
+#define SECRET_CH_ID  2463312 // replace 0000000 with your channel number
+#define SECRET_CH_IDr  2022763
+#define SECRET_WRITE_APIKEY "WMFJMT9UXRM04XOF"   // replace XYZ with your channel write API Key
+#define SECRET_READ_APIKEY "47HAAS2M6GPPTY0E"   // replace XYZ with your channel read API Key
+
+#define MQTT_BROKER "broker.mqttdashboard.com"
+#define MQTT_CLIENT_ID "micropython-weather-demo"
+#define MQTT_TOPIC_TEMPERATURE "wokwi-weather"
+#define MQTT_TOPIC_HUMIDITY "wokwi-weather"
+#define MQTT_TOPIC_DISTANCE "wokwi-weather"
+
+char ssid[] = SECRET_SSID;   // your network SSID (name)
+char pass[] = SECRET_PASS;   // your network password
+int keyIndex = 0;            // your network key Index number (needed only for WEP)
+
+WiFiClient  client;
+PubSubClient mqttClient(client);
+
+unsigned long myChannelNumber = SECRET_CH_ID;
+unsigned long readmyChannelNumber = SECRET_CH_IDr;
+const char * myWriteAPIKey = SECRET_WRITE_APIKEY;
+const char * myReadAPIKey = SECRET_READ_APIKEY;
+unsigned int dataFieldOne = 1;
+
+float aConst = 2.25E-02;
+const int DHT_PIN = 15;
+
+DHTesp dhtSensor;
+
+void setup() {
+  Serial.begin(115200);
+  dhtSensor.setup(DHT_PIN, DHTesp::DHT22);
+  pinMode(trig, OUTPUT);
+  pinMode(echo, INPUT);
+  pinMode(18, OUTPUT);
+  
+  while (!Serial) {
+    ; // wait for serial port to connect. Needed for Leonardo native USB port only
+  }
+
+  WiFi.mode(WIFI_STA);
+  ThingSpeak.begin(client);  // Initialize ThingSpeak
+  mqttClient.setServer(MQTT_BROKER, 1883); // Initialize MQTT
+}
+
+void reconnect() {
+  while (!mqttClient.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    if (mqttClient.connect(MQTT_CLIENT_ID)) {
+      Serial.println("connected");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" try again in 5 seconds");
+      delay(5000);
+    }
+  }
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.print("Attempting to connect to SSID: ");
+    Serial.println(SECRET_SSID);
+    while (WiFi.status() != WL_CONNECTED) {
+      WiFi.begin(ssid, pass); // Connect to WPA/WPA2 network. Change this line if using open or WEP network
+      Serial.print(".");
+      delay(5000);
+    }
+    Serial.println("\nConnected.");
+  }
+
+  if (!mqttClient.connected()) {
+    reconnect();
+  }
+  mqttClient.loop();
+
+  if (mqttClient.connected()) {
+    TempAndHumidity data = dhtSensor.getTempAndHumidity();
+    Serial.println("Temp: " + String(data.temperature, 2) + "°C");
+    Serial.println("Humidity: " + String(data.humidity, 1) + "%");
+
+    digitalWrite(trig, LOW);
+    delayMicroseconds(2);
+    digitalWrite(trig, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trig, LOW);
+
+    duration = pulseIn(echo, HIGH);
+    distance = duration * 0.034 / 2;
+    Serial.println("Distance: " + String(distance) + " cm");
+
+    if (mqttClient.publish(MQTT_TOPIC_TEMPERATURE, ("Temperature: " + String(data.temperature, 2) + "°C").c_str())) {
+      Serial.println("Temperature data published successfully");
+    } else {
+      Serial.print("Failed to publish temperature data. Error code: ");
+      Serial.println(mqttClient.state());
+    }
+
+    if (mqttClient.publish(MQTT_TOPIC_HUMIDITY, ("Humidity: " + String(data.humidity, 1) + "%").c_str())) {
+      Serial.println("Humidity data published successfully");
+    } else {
+      Serial.print("Failed to publish humidity data. Error code: ");
+      Serial.println(mqttClient.state());
+    }
+
+    if (mqttClient.publish(MQTT_TOPIC_DISTANCE, ("Distance: " + String(distance) + " cm").c_str())) {
+      Serial.println("Distance data published successfully");
+    } else {
+      Serial.print("Failed to publish distance data. Error code: ");
+      Serial.println(mqttClient.state());
+    }
+
+    // Thingspeak
+    int statusCode;
+    ThingSpeak.setField(1, data.temperature);
+    ThingSpeak.setField(2, data.humidity);
+    ThingSpeak.setField(3, distance);
+    statusCode = ThingSpeak.writeFields(myChannelNumber, SECRET_WRITE_APIKEY);
+
+    aConst = readTSData(readmyChannelNumber, dataFieldOne);
+    Serial.println(aConst);
+    if (aConst == 1) {
+      digitalWrite(18, HIGH);
+      Serial.println("Relay on");
+    } else {
+      digitalWrite(18, LOW);
+      Serial.println("Relay off");
+    }
+
+   delay(1000);
+    
+  }
+  
+  
+   else {
+    Serial.println("MQTT client not connected. Skipping data publishing.");
+  }
+
+  
+  
+  // if (statusCode == 200) { //successful writing code
+    Serial.println("Channel update successful.");
+  // } else {
+  //   Serial.println("Problem Writing data. HTTP error code :" + String(statusCode));
+  // }
+  delay(1500); // data to be uploaded every 15secs
+}
+
+float readTSData(long TSChannel, unsigned int TSField) {
+  float data =  ThingSpeak.readFloatField(TSChannel, TSField, SECRET_READ_APIKEY);
+  // Serial.println( " Data read from ThingSpeak: " + String( data, 9 ) );
+  return data;
+}

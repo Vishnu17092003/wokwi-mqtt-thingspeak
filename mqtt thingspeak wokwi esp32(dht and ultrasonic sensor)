@@ -1,3 +1,5 @@
+//i)  Go to "https://www.hivemq.com/demos/websocket-client/" for mqtt 
+//ii) Go to "https://thingspeak.com/" for thingspeak 
 #include "DHTesp.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
